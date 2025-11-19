@@ -1,3 +1,396 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+免费音乐MCP WebSocket服务器
+为小智AI音响提供音乐控制服务 - WebSocket版本
+"""
+
+import asyncio, io, os, logging, json, socket
+from aiohttp import web, WSMsgType       
+# 仅多一个轻量 HTTP 框架
+import websockets
+from typing import Dict, Any, List
+from datetime import datetime
+from websockets import serve as ws_serve
+from websockets.exceptions import ConnectionClosed
+# 顶部导入补充
+from websockets.asyncio.server import ServerConnection
+# 15 专用
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("music-mcp")
+
+# 播放状态管理
+playback_state = {
+    "is_playing": False,
+    "current_song": None,
+    "volume": 50,
+    "position": 0,
+    "playlist": []
+}
+
+# 模拟音乐数据库
+MOCK_MUSIC_DATABASE = [
+    {"id": "1", "name": "青花瓷", "artist": "周杰伦", "album": "我很忙", "duration": 238},
+    {"id": "2", "name": "稻香", "artist": "周杰伦", "album": "魔杰座", "duration": 223},
+    {"id": "3", "name": "夜曲", "artist": "周杰伦", "album": "十一月的萧邦", "duration": 237},
+    {"id": "4", "name": "告白气球", "artist": "周杰伦", "album": "周杰伦的床边故事", "duration": 207},
+    {"id": "5", "name": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269},
+    {"id": "6", "name": "演员", "artist": "薛之谦", "album": "绅士", "duration": 253},
+    {"id": "7", "name": "体面", "artist": "于文文", "album": "体面", "duration": 247},
+    {"id": "8", "name": "成都", "artist": "赵雷", "album": "无法长大", "duration": 327},
+    {"id": "9", "name": "南山南", "artist": "马頔", "album": "孤岛", "duration": 293},
+    {"id": "10", "name": "理想", "artist": "赵雷", "album": "吉姆餐厅", "duration": 279}
+]
+
+class MCPWebSocketServer:
+    """MCP WebSocket服务器"""
+    
+    def __init__(self):
+        self.tools = {}
+        self.resources = {}
+        
+    def add_tool(self, name: str, description: str, input_schema: Dict[str, Any], handler):
+        """添加工具"""
+        self.tools[name] = {
+            "name": name,
+            "description": description,
+            "inputSchema": input_schema,
+            "handler": handler
+        }
+        
+    def add_resource(self, uri: str, name: str, description: str = ""):
+        """添加资源"""
+        self.resources[uri] = {
+            "uri": uri,
+            "name": name,
+            "description": description
+        }
+    
+    async def handle_message(self, websocket, message: str):
+        """处理WebSocket消息"""
+        try:
+            data = json.loads(message)
+            method = data.get("method")
+            msg_id = data.get("id")
+            params = data.get("params", {})
+            
+            logger.info(f"收到消息: {method}")
+            
+            if method == "initialize":
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {
+                            "tools": {"listChanged": True},
+                            "resources": {"subscribe": True, "listChanged": True}
+                        },
+                        "serverInfo": {
+                            "name": "music-mcp-server",
+                            "version": "1.0.0"
+                        }
+                    }
+                }
+                
+            elif method == "tools/list":
+                tools_list = [{
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "inputSchema": tool["inputSchema"]
+                } for tool in self.tools.values()]
+                
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "tools": tools_list
+                    }
+                }
+                
+            elif method == "tools/call":
+                tool_name = params.get("name")
+                arguments = params.get("arguments", {})
+                
+                if tool_name in self.tools:
+                    try:
+                        result = await self.tools[tool_name]["handler"](arguments)
+                        response = {
+                            "jsonrpc": "2.0",
+                            "id": msg_id,
+                            "result": {
+                                "content": [{
+                                    "type": "text",
+                                    "text": result
+                                }]
+                            }
+                        }
+                    except Exception as e:
+                        logger.error(f"工具调用错误: {e}")
+                        response = {
+                            "jsonrpc": "2.0",
+                            "id": msg_id,
+                            "error": {
+                                "code": -32603,
+                                "message": f"工具执行错误: {str(e)}"
+                            }
+                        }
+                else:
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "error": {
+                            "code": -32601,
+                            "message": f"未知工具: {tool_name}"
+                        }
+                    }
+                    
+            elif method == "resources/list":
+                resources_list = list(self.resources.values())
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "resources": resources_list
+                    }
+                }
+                
+            elif method == "resources/read":
+                uri = params.get("uri")
+                if uri in self.resources:
+                    content = await self.get_resource_content(uri)
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "result": {
+                            "contents": [{
+                                "uri": uri,
+                                "mimeType": "text/plain",
+                                "text": content
+                            }]
+                        }
+                    }
+                else:
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "error": {
+                            "code": -32602,
+                            "message": f"未知资源: {uri}"
+                        }
+                    }
+            else:
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "error": {
+                        "code": -32601,
+                        "message": f"未知方法: {method}"
+                    }
+                }
+            
+            await websocket.send(json.dumps(response))
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON解析错误: {e}")
+            error_response = {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32700,
+                    "message": "JSON解析错误"
+                }
+            }
+            await websocket.send(json.dumps(error_response))
+            
+        except Exception as e:
+            logger.error(f"处理消息错误: {e}")
+            error_response = {
+                "jsonrpc": "2.0",
+                "id": data.get("id") if 'data' in locals() else None,
+                "error": {
+                    "code": -32603,
+                    "message": f"内部错误: {str(e)}"
+                }
+            }
+            await websocket.send(json.dumps(error_response))
+    
+    async def get_resource_content(self, uri: str) -> str:
+        """获取资源内容"""
+        if uri == "music://current_playlist":
+            playlist = playback_state["playlist"]
+            if not playlist:
+                return "播放列表为空"
+            
+            content = "当前播放列表:\n\n"
+            for i, song in enumerate(playlist, 1):
+                content += f"{i}. {song['name']} - {song['artist']}\n"
+            return content
+            
+        elif uri == "music://current_playing":
+            current = playback_state["current_song"]
+            if not current:
+                return "当前没有播放歌曲"
+            
+            status = "播放中" if playback_state["is_playing"] else "已暂停"
+            return f"当前播放: {current['name']} - {current['artist']}\n状态: {status}\n音量: {playback_state['volume']}%"
+            
+        return "未知资源"
+
+# 音乐搜索API
+async def search_music_api(query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """搜索音乐API"""
+    # 模拟搜索延迟
+    await asyncio.sleep(0.1)
+    
+    # 简单的关键词匹配
+    results = []
+    query_lower = query.lower()
+    
+    for song in MOCK_MUSIC_DATABASE:
+        if (query_lower in song["name"].lower() or 
+            query_lower in song["artist"].lower() or 
+            query_lower in song["album"].lower()):
+            results.append(song)
+            
+        if len(results) >= limit:
+            break
+    
+    # 如果没有匹配结果，返回一些默认结果
+    if not results:
+        results = MOCK_MUSIC_DATABASE[:limit]
+    
+    return results
+
+# 工具处理函数
+async def search_music_handler(arguments: Dict[str, Any]) -> str:
+    query = arguments["query"]
+    limit = arguments.get("limit", 10)
+    
+    results = await search_music_api(query, limit)
+    
+    response = f"搜索 '{query}' 的结果：\n\n"
+    for i, song in enumerate(results, 1):
+        response += f"{i}. {song['name']} - {song['artist']}\n"
+        response += f"   专辑: {song['album']}\n"
+        response += f"   时长: {song['duration']}秒\n"
+        response += f"   ID: {song['id']}\n\n"
+    
+    return response
+
+async def play_music_handler(arguments: Dict[str, Any]) -> str:
+    song_id = arguments["song_id"]
+    song_name = arguments.get("song_name", "未知歌曲")
+    artist = arguments.get("artist", "未知歌手")
+    
+    playback_state["current_song"] = {
+        "id": song_id,
+        "name": song_name,
+        "artist": artist
+    }
+    playback_state["is_playing"] = True
+    playback_state["position"] = 0
+    
+    return f"正在播放: {song_name} - {artist}"
+
+async def pause_music_handler(arguments: Dict[str, Any]) -> str:
+    playback_state["is_playing"] = False
+    return "音乐已暂停"
+
+async def resume_music_handler(arguments: Dict[str, Any]) -> str:
+    playback_state["is_playing"] = True
+    current = playback_state["current_song"]
+    if current:
+        return f"继续播放: {current['name']} - {current['artist']}"
+    else:
+        return "没有可继续播放的歌曲"
+
+async def stop_music_handler(arguments: Dict[str, Any]) -> str:
+    playback_state["is_playing"] = False
+    playback_state["current_song"] = None
+    playback_state["position"] = 0
+    return "音乐已停止"
+
+async def set_volume_handler(arguments: Dict[str, Any]) -> str:
+    volume = arguments["volume"]
+    playback_state["volume"] = volume
+    return f"音量已设置为: {volume}%"
+
+async def add_to_playlist_handler(arguments: Dict[str, Any]) -> str:
+    song_id = arguments["song_id"]
+    song_name = arguments.get("song_name", "未知歌曲")
+    artist = arguments.get("artist", "未知歌手")
+    
+    song = {
+        "id": song_id,
+        "name": song_name,
+        "artist": artist
+    }
+    playback_state["playlist"].append(song)
+    
+    return f"已添加到播放列表: {song_name} - {artist}"
+
+async def get_playlist_handler(arguments: Dict[str, Any]) -> str:
+    playlist = playback_state["playlist"]
+    if not playlist:
+        return "播放列表为空"
+    
+    response = "当前播放列表:\n\n"
+    for i, song in enumerate(playlist, 1):
+        response += f"{i}. {song['name']} - {song['artist']}\n"
+    
+    return response
+
+async def clear_playlist_handler(arguments: Dict[str, Any]) -> str:
+    playback_state["playlist"] = []
+    return "播放列表已清空"
+
+async def next_song_handler(arguments: Dict[str, Any]) -> str:
+    playlist = playback_state["playlist"]
+    current = playback_state["current_song"]
+    
+    if not playlist:
+        return "播放列表为空，无法切换到下一首"
+    
+    if current:
+        try:
+            current_index = next(i for i, song in enumerate(playlist) if song["id"] == current["id"])
+            next_index = (current_index + 1) % len(playlist)
+        except StopIteration:
+            next_index = 0
+    else:
+        next_index = 0
+    
+    next_song = playlist[next_index]
+    playback_state["current_song"] = next_song
+    playback_state["is_playing"] = True
+    
+    return f"下一首: {next_song['name']} - {next_song['artist']}"
+
+async def previous_song_handler(arguments: Dict[str, Any]) -> str:
+    playlist = playback_state["playlist"]
+    current = playback_state["current_song"]
+    
+    if not playlist:
+        return "播放列表为空，无法切换到上一首"
+    
+    if current:
+        try:
+            current_index = next(i for i, song in enumerate(playlist) if song["id"] == current["id"])
+            prev_index = (current_index - 1) % len(playlist)
+        except StopIteration:
+            prev_index = len(playlist) - 1
+    else:
+        prev_index = len(playlist) - 1
+    
+    prev_song = playlist[prev_index]
+    playback_state["current_song"] = prev_song
+    playback_state["is_playing"] = True
+    
+    return f"上一首: {prev_song['name']} - {prev_song['artist']}"
+
 # -------------- 新增：aiohttp 统一入口 --------------
 from aiohttp import web, WSMsgType
 

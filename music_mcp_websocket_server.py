@@ -402,13 +402,54 @@ async def handle_client(websocket):
 # 创建服务器实例
 server = MCPWebSocketServer()
 
-async def main():
-    """主函数"""
-    logger.info("启动免费音乐MCP WebSocket服务器...")
+#unsupported HTTP method; expected GET; got HEAD
+#Render 的健康检查默认用 HEAD 请求（不是 GET），而 websockets 库 只认 GET + Upgrade，于是直接抛 InvalidMessage，导致 handshake 失败。
+#解决思路：让 同一个端口 既能返回 HEAD/GET 200，又能正常升级 WebSocket。
+#最轻量的办法——在前面套一层 简单的 TCP 分流，先读第一行：
+#是 HEAD 或 GET 但 没有 Upgrade: websocket → 按 HTTP 回 200
+#是 GET 且 带 Upgrade: websocket → 交给 websockets 库做握手
+#async def main():
+#    """主函数"""
+#   logger.info("启动免费音乐MCP WebSocket服务器...")
     
     # 添加资源
+#    server.add_resource("music://current_playlist", "当前播放列表", "显示当前播放列表中的所有歌曲")
+#    server.add_resource("music://current_playing", "当前播放", "显示当前正在播放的歌曲信息")
+import asyncio, re, io, websockets
+
+async def http_health_responder(reader, writer):
+    """回 Render 的 HEAD/GET 探针 200 """
+    data = await reader.read(4096)
+    if not data:
+        writer.close(); return
+    body = b"OK"
+    writer.write(b"HTTP/1.1 200 OK\r\n"
+                 b"Content-Length: %d\r\n"
+                 b"Connection: close\r\n\r\n%s" % (len(body), body))
+    await writer.drain()
+    writer.close()
+
+async def ws_handler(websocket):
+    """复用你已有的 handle_client"""
+    await handle_client(websocket)
+
+async def tcp_splitter(reader, writer):
+    """分流：HTTP 探针 vs WebSocket"""
+    peeked = await reader.read(4096)
+    if not peeked:
+        writer.close(); return
+    reader._buffer = peeked + reader._buffer
+    is_ws = 'upgrade: websocket' in peeked.decode().lower()
+    if is_ws:
+        await websockets.asyncio.server.serve(ws_handler, reader=reader, writer=writer)
+    else:
+        await http_health_responder(reader, writer)
+
+async def main():
+    logger.info("启动分流服务器（HTTP 探针 + WebSocket）...")
+    # 注册工具、资源保持原样
     server.add_resource("music://current_playlist", "当前播放列表", "显示当前播放列表中的所有歌曲")
-    server.add_resource("music://current_playing", "当前播放", "显示当前正在播放的歌曲信息")
+    server.add_resource("music://current_playing", "当前播放", "显示当前正在播放的歌曲信息") 
     
     # 注册工具
     server.add_tool("search_music", "搜索音乐", {
@@ -485,14 +526,21 @@ async def main():
     
     # 启动WebSocket服务器
     # 支持云端部署的动态端口配置
-    host = os.getenv('HOST', '0.0.0.0')  # 云端部署需要监听所有接口
-    port = int(os.getenv('PORT', 10000))  # 支持云平台的动态端口
+    #host = os.getenv('HOST', '0.0.0.0')  # 云端部署需要监听所有接口
+    #port = int(os.getenv('PORT', 10000))  # 支持云平台的动态端口
     
-    start_server = websockets.serve(handle_client, host, port)
-    logger.info(f"WebSocket服务器启动在 ws://{host}:{port}")
+    #start_server = websockets.serve(handle_client, host, port)
+    #logger.info(f"WebSocket服务器启动在 ws://{host}:{port}")
     
-    await start_server
-    await asyncio.Future()  # 保持服务器运行
+    #await start_server
+    #await asyncio.Future()  # 保持服务器运行
+    
+    host = '0.0.0.0'
+    port = int(os.getenv("PORT", 10000))
+    srv = await asyncio.start_server(tcp_splitter, host, port)
+    logger.info(f"监听 {host}:{port}")
+    async with srv:
+        await srv.serve_forever()
 
 if __name__ == "__main__":
     asyncio.run(main())

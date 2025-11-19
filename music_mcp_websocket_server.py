@@ -12,6 +12,7 @@ import os
 import websockets
 from typing import Dict, Any, List
 from datetime import datetime
+from websockets.server import serve as ws_serve
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -461,7 +462,8 @@ async def tcp_splitter(reader, writer):
     reader._buffer = bytearray(peeked) + reader._buffer
     is_ws = 'upgrade: websocket' in peeked.decode().lower()
     if is_ws:
-        await websockets.asyncio.server.serve(ws_handler, reader=reader, writer=writer)
+        # await websockets.asyncio.server.serve(ws_handler, reader=reader, writer=writer)  websockets 10.x
+        await ws_serve(ws_handler, reader=reader, writer=writer, close_timeout=None)
     else:
         await http_health_responder(reader, writer)
 

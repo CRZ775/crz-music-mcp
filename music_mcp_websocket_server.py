@@ -13,6 +13,8 @@ import websockets
 from typing import Dict, Any, List
 from datetime import datetime
 from websockets.server import serve as ws_serve
+from websockets.server import WebSocketServerProtocol
+from websockets.exceptions import ConnectionClosed
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -420,20 +422,22 @@ server = MCPWebSocketServer()
 import asyncio, re, io, websockets
 
 async def http_health_responder(reader, writer):
-    """回 Render 的 HEAD/GET 探针 200 """
-    data = await reader.read(4096)
-    if not data:
-        writer.close(); return
     body = b"OK"
     writer.write(b"HTTP/1.1 200 OK\r\n"
                  b"Content-Length: %d\r\n"
                  b"Connection: close\r\n\r\n%s" % (len(body), body))
     await writer.drain()
     writer.close()
+    await writer.wait_closed()
 
-async def ws_handler(websocket):
-    """复用你已有的 handle_client"""
-    await handle_client(websocket)
+async def ws_handler(ws: WebSocketServerProtocol, path):
+    """复用你已有的 handle_client 逻辑"""
+    logger.info("WebSocket 握手成功 %s", ws.remote_address)
+    try:
+        async for message in ws:
+            await server.handle_message(ws, message)   # 你原来的方法
+    except ConnectionClosed:
+        logger.info("WebSocket 断开 %s", ws.remote_address)
 
 #async def tcp_splitter(reader, writer):
 #    """分流：HTTP 探针 vs WebSocket"""
@@ -447,24 +451,37 @@ async def ws_handler(websocket):
 #    else:
 #        await http_health_responder(reader, writer)
 async def tcp_splitter(reader, writer):
-    # 1. 只读第一行 + 头部，保证 Upgrade 能被 websockets 再解析
+    """先读头部，判断协议类型"""
+    # 读第一行+头（非阻塞，最多 8 KB）
+    header = io.BytesIO()
     first_line = await reader.readline()
     if not first_line:
         writer.close(); return
-    headers = io.BytesIO()
+    header.write(first_line)
     while True:
         line = await reader.readline()
-        headers.write(line)
+        header.write(line)
         if line == b'\r\n':
             break
-    peeked = first_line + headers.getvalue()
-    # 2. 按正确顺序放回
-    reader._buffer = bytearray(peeked) + reader._buffer
-    is_ws = 'upgrade: websocket' in peeked.decode().lower()
-    if is_ws:
-        # await websockets.asyncio.server.serve(ws_handler, reader=reader, writer=writer)  websockets 10.x
-        await ws_serve(ws_handler, reader=reader, writer=writer, close_timeout=None)
+    head_text = header.getvalue().decode('utf-8', 'ignore').lower()
+
+    # 把数据塞回流
+    reader._buffer = bytearray(header.getvalue()) + reader._buffer
+
+    if 'upgrade: websocket' in head_text:
+        # 是 WebSocket → 手动包装
+        ws_proto = WebSocketServerProtocol(
+            ws_handler,
+            host=None,          # 自动取 socket 本地地址
+            port=None,
+            logger=logger,
+            close_timeout=None,
+        )
+        # 把已经建好的 TCP 交给 websockets
+        await ws_proto.handshake(reader, writer)
+        # 握手完成后，协议内部会自动调度 ws_handler
     else:
+        # 普通 HTTP → 回 200
         await http_health_responder(reader, writer)
 
 async def main():
@@ -560,7 +577,7 @@ async def main():
     host = '0.0.0.0'
     port = int(os.getenv("PORT", 10000))
     srv = await asyncio.start_server(tcp_splitter, host, port)
-    logger.info(f"监听 {host}:{port}")
+    logger.info("监听 %s:%d", host, port)
     async with srv:
         await srv.serve_forever()
 

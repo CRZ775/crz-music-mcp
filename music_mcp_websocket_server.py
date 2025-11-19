@@ -6,7 +6,7 @@
 """
 
 import asyncio, io, os, logging, json, socket
-from aiohttp import web, WSMsgType       
+from aiohttp import web         
 # 仅多一个轻量 HTTP 框架
 import websockets
 from typing import Dict, Any, List
@@ -391,92 +391,180 @@ async def previous_song_handler(arguments: Dict[str, Any]) -> str:
     
     return f"上一首: {prev_song['name']} - {prev_song['artist']}"
 
-# -------------- 新增：aiohttp 统一入口 --------------
-from aiohttp import web, WSMsgType
+async def handle_client(websocket):
+    """处理WebSocket客户端连接"""
+    logger.info(f"新客户端连接: {websocket.remote_address}")
+    
+    try:
+        async for message in websocket:
+            await server.handle_message(websocket, message)
+    except websockets.exceptions.ConnectionClosed:
+        logger.info(f"客户端断开连接: {websocket.remote_address}")
+    except Exception as e:
+        logger.error(f"处理客户端错误: {e}")
 
-async def websocket_handler(request: web.Request):
-    """处理 WebSocket 连接"""
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
+# 创建服务器实例
+server = MCPWebSocketServer()
 
-    async for msg in ws:
-        if msg.type == WSMsgType.TEXT:
-            await server.handle_message(ws, msg.data)
-        elif msg.type == WSMsgType.ERROR:
-            logger.error("WebSocket error: %s", ws.exception())
+#unsupported HTTP method; expected GET; got HEAD
+#Render 的健康检查默认用 HEAD 请求（不是 GET），而 websockets 库 只认 GET + Upgrade，于是直接抛 InvalidMessage，导致 handshake 失败。
+#解决思路：让 同一个端口 既能返回 HEAD/GET 200，又能正常升级 WebSocket。
+#最轻量的办法——在前面套一层 简单的 TCP 分流，先读第一行：
+#是 HEAD 或 GET 但 没有 Upgrade: websocket → 按 HTTP 回 200
+#是 GET 且 带 Upgrade: websocket → 交给 websockets 库做握手
+#async def main():
+#    """主函数"""
+#   logger.info("启动免费音乐MCP WebSocket服务器...")
+    
+    # 添加资源
+#    server.add_resource("music://current_playlist", "当前播放列表", "显示当前播放列表中的所有歌曲")
+#    server.add_resource("music://current_playing", "当前播放", "显示当前正在播放的歌曲信息")
+#
+import asyncio, re, io, websockets
 
-    return ws
+# ---------- 健康检查响应 ----------
+async def http_200(writer):
+    body = b"OK"
+    writer.write(b"HTTP/1.1 200 OK\r\n"
+                 b"Content-Length: %d\r\n"
+                 b"Connection: close\r\n\r\n%s" % (len(body), body))
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
 
-async def health(_: web.Request):
-    """Render 健康检查"""
-    return web.Response(text="OK")
+# ---------- TCP 分流 ----------
+async def tcp_splitter(reader, writer):
+    header = io.BytesIO()
+    first_line = await reader.readline()
+    if not first_line:
+        writer.close()
+        await writer.wait_closed()
+        return
+    header.write(first_line)
+    while True:
+        line = await reader.readline()
+        header.write(line)
+        if line == b'\r\n':
+            break
+    head_text = header.getvalue().decode('utf-8', 'ignore').lower()
 
-def create_app() -> web.Application:
-    app = web.Application()
-    app.router.add_get("/ws", websocket_handler)  # WebSocket 入口
-    app.router.add_get("/", health)               # 健康检查
-    app.router.add_head("/", health)              # Render 用 HEAD 探活
-    return app
+    # 把数据塞回流
+    reader._buffer = bytearray(header.getvalue()) + reader._buffer
 
-# -------------- 替换原来的 main() --------------
+    if 'upgrade: websocket' in head_text:
+        sock = writer.get_extra_info('socket')
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+        # ===== websockets 15.x 官方做法 =====
+        from websockets.asyncio.server import ServerConnection
+        conn = ServerConnection(
+            handle_client,
+            server_reader=reader,
+            server_writer=writer,
+            close_timeout=None,
+            logger=logger,
+        )
+        await conn.run()          # 会阻塞到 WebSocket 关闭
+    else:
+        await http_200(writer)
+        
+# ---------- 启动 ----------
 async def main():
-    # 1. 注册工具（完全沿用你已有代码）
+    # 1. 注册工具/资源（保持你原来代码）
     server.add_resource("music://current_playlist", "当前播放列表", "")
-    server.add_resource("music://current_playing", "当前播放", "")
-
+    server.add_resource("music://current_playing", "当前播放", "") 
+    
+    # 注册工具
     server.add_tool("search_music", "搜索音乐", {
         "type": "object",
         "properties": {
-            "query": {"type": "string"},
-            "limit": {"type": "integer", "default": 10, "minimum": 1, "maximum": 50}
+            "query": {"type": "string", "description": "搜索关键词"},
+            "limit": {"type": "integer", "description": "返回结果数量", "default": 10, "minimum": 1, "maximum": 50}
         },
         "required": ["query"]
     }, search_music_handler)
-
+    
     server.add_tool("play_music", "播放音乐", {
         "type": "object",
         "properties": {
-            "song_id": {"type": "string"},
-            "song_name": {"type": "string"},
-            "artist": {"type": "string"}
+            "song_id": {"type": "string", "description": "歌曲ID"},
+            "song_name": {"type": "string", "description": "歌曲名称"},
+            "artist": {"type": "string", "description": "歌手名称"}
         },
         "required": ["song_id"]
     }, play_music_handler)
-
-    server.add_tool("pause_music", "暂停音乐", {"type": "object"}, pause_music_handler)
-    server.add_tool("resume_music", "继续播放", {"type": "object"}, resume_music_handler)
-    server.add_tool("stop_music", "停止音乐", {"type": "object"}, stop_music_handler)
+    
+    server.add_tool("pause_music", "暂停音乐", {
+        "type": "object",
+        "properties": {}
+    }, pause_music_handler)
+    
+    server.add_tool("resume_music", "继续播放音乐", {
+        "type": "object",
+        "properties": {}
+    }, resume_music_handler)
+    
+    server.add_tool("stop_music", "停止音乐", {
+        "type": "object",
+        "properties": {}
+    }, stop_music_handler)
+    
     server.add_tool("set_volume", "设置音量", {
         "type": "object",
-        "properties": {"volume": {"type": "integer", "minimum": 0, "maximum": 100}},
+        "properties": {
+            "volume": {"type": "integer", "description": "音量百分比", "minimum": 0, "maximum": 100}
+        },
         "required": ["volume"]
     }, set_volume_handler)
+    
     server.add_tool("add_to_playlist", "添加到播放列表", {
         "type": "object",
         "properties": {
-            "song_id": {"type": "string"},
-            "song_name": {"type": "string"},
-            "artist": {"type": "string"}
+            "song_id": {"type": "string", "description": "歌曲ID"},
+            "song_name": {"type": "string", "description": "歌曲名称"},
+            "artist": {"type": "string", "description": "歌手名称"}
         },
         "required": ["song_id"]
     }, add_to_playlist_handler)
-    server.add_tool("get_playlist", "获取播放列表", {"type": "object"}, get_playlist_handler)
-    server.add_tool("clear_playlist", "清空播放列表", {"type": "object"}, clear_playlist_handler)
-    server.add_tool("next_song", "下一首", {"type": "object"}, next_song_handler)
-    server.add_tool("previous_song", "上一首", {"type": "object"}, previous_song_handler)
-
-    # 2. 启动 aiohttp
+    
+    server.add_tool("get_playlist", "获取播放列表", {
+        "type": "object",
+        "properties": {}
+    }, get_playlist_handler)
+    
+    server.add_tool("clear_playlist", "清空播放列表", {
+        "type": "object",
+        "properties": {}
+    }, clear_playlist_handler)
+    
+    server.add_tool("next_song", "下一首歌", {
+        "type": "object",
+        "properties": {}
+    }, next_song_handler)
+    
+    server.add_tool("previous_song", "上一首歌", {
+        "type": "object",
+        "properties": {}
+    }, previous_song_handler)
+    
+    # 启动WebSocket服务器
+    # 支持云端部署的动态端口配置
+    #host = os.getenv('HOST', '0.0.0.0')  # 云端部署需要监听所有接口
+    #port = int(os.getenv('PORT', 10000))  # 支持云平台的动态端口
+    
+    #start_server = websockets.serve(handle_client, host, port)
+    #logger.info(f"WebSocket服务器启动在 ws://{host}:{port}")
+    
+    #await start_server
+    #await asyncio.Future()  # 保持服务器运行
+    
+    # 2. 监听单端口
+    host = "0.0.0.0"
     port = int(os.getenv("PORT", 10000))
-    app = create_app()
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logger.info("Listening on http://0.0.0.0:%s  (WebSocket: ws://0.0.0.0:%s/ws)", port, port)
+    srv = await asyncio.start_server(tcp_splitter, host, port)
+    logger.info("Listening on %s:%s (Render ready)", host, port)
+    async with srv:
+        await srv.serve_forever()
 
-    # 3. 永久挂起
-    await asyncio.Event().wait()
-
-# -------------- 入口不变 --------------
 if __name__ == "__main__":
     asyncio.run(main())

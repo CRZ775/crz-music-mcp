@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 暴露端口
-EXPOSE 8765
+EXPOSE 10000
 
 # 启动命令
 CMD ["python3", "music_mcp_websocket_server.py"]

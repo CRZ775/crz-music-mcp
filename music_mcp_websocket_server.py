@@ -12,6 +12,8 @@ from typing import Dict, Any, List
 from datetime import datetime
 from websockets import serve as ws_serve
 from websockets.exceptions import ConnectionClosed
+# 顶部导入补充
+from websockets.server import serve_connection   # ≥12 专用
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -428,6 +430,7 @@ async def http_200(writer):
     writer.close()
     await writer.wait_closed()
 
+
 # ---------- TCP 分流 ----------
 async def tcp_splitter(reader, writer):
     header = io.BytesIO()
@@ -446,14 +449,15 @@ async def tcp_splitter(reader, writer):
     reader._buffer = bytearray(header.getvalue()) + reader._buffer
 
     if 'upgrade: websocket' in head_text:
-        # ✅ 官方兼容方式：取出 socket，传给 serve()
         sock = writer.get_extra_info('socket')
-        # 关闭 Nagle，可选
+        # 关闭 Nagle（可选）
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        # 让 websockets 接管
-        await ws_serve(
+
+        # ✅ 12.x 官方做法：直接 serve 这条已连接 socket
+        await serve_connection(
             handle_client,
-            sock=sock,          # 关键参数
+            reader,
+            writer,
             close_timeout=None,
             logger=logger,
         )

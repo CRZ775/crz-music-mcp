@@ -14,8 +14,8 @@ from datetime import datetime
 from websockets import serve as ws_serve
 from websockets.exceptions import ConnectionClosed
 # 顶部导入补充
-from websockets.server import serve_connection  
-# ≥12 专用
+from websockets.asyncio.server import serve_connection
+# 15 专用
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)

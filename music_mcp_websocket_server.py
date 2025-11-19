@@ -430,15 +430,6 @@ async def http_health_responder(reader, writer):
     writer.close()
     await writer.wait_closed()
 
-async def ws_handler(ws: WebSocketServerProtocol, path):
-    """复用你已有的 handle_client 逻辑"""
-    logger.info("WebSocket 握手成功 %s", ws.remote_address)
-    try:
-        async for message in ws:
-            await server.handle_message(ws, message)   # 你原来的方法
-    except ConnectionClosed:
-        logger.info("WebSocket 断开 %s", ws.remote_address)
-
 #async def tcp_splitter(reader, writer):
 #    """分流：HTTP 探针 vs WebSocket"""
 #    peeked = await reader.read(4096)
@@ -469,19 +460,22 @@ async def tcp_splitter(reader, writer):
     reader._buffer = bytearray(header.getvalue()) + reader._buffer
 
     if 'upgrade: websocket' in head_text:
-        # 是 WebSocket → 手动包装
         ws_proto = WebSocketServerProtocol(
-            ws_handler,
-            host=None,          # 自动取 socket 本地地址
+            ws_handler=None,          # 我们手动驱动
+            host=None,
             port=None,
             logger=logger,
             close_timeout=None,
+            origins=None,             # 关闭 origin 校验
         )
-        # 把已经建好的 TCP 交给 websockets
         await ws_proto.handshake(reader, writer)
-        # 握手完成后，协议内部会自动调度 ws_handler
+        # 手动驱动消息循环
+        try:
+            async for message in ws_proto:
+                await server.handle_message(ws_proto, message)
+        except ConnectionClosed:
+            logger.info("WebSocket 断开 %s", ws_proto.remote_address)
     else:
-        # 普通 HTTP → 回 200
         await http_health_responder(reader, writer)
 
 async def main():
@@ -577,7 +571,7 @@ async def main():
     host = '0.0.0.0'
     port = int(os.getenv("PORT", 10000))
     srv = await asyncio.start_server(tcp_splitter, host, port)
-    logger.info("监听 %s:%d", host, port)
+    logger.info(f"监听 {host}:{port}")
     async with srv:
         await srv.serve_forever()
 

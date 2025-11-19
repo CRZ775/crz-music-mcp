@@ -6,9 +6,8 @@
 """
 
 import asyncio, io, os, logging, json, socket
-from aiohttp import web         
-# 仅多一个轻量 HTTP 框架
-import websockets
+from aiohttp import web, WSMsgType   
+import  re,  websockets
 from typing import Dict, Any, List
 from datetime import datetime
 from websockets import serve as ws_serve
@@ -20,7 +19,31 @@ from websockets.asyncio.server import ServerConnection
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("music-mcp")
+# 新增：aiohttp 统一入口 
+async def websocket_handler(request: web.Request):
+    """aiohttp 接管 WebSocket"""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
 
+    async for msg in ws:
+        if msg.type == WSMsgType.TEXT:
+            await server.handle_message(ws, msg.data)
+        elif msg.type == WSMsgType.ERROR:
+            logger.error("WebSocket error: %s", ws.exception())
+
+    return ws
+
+async def health(_: web.Request):
+    """Render 健康检查（HEAD/GET 均可）"""
+    return web.Response(text="OK")
+
+def create_app() -> web.Application:
+    app = web.Application()
+    app.router.add_get("/ws", websocket_handler)  # WebSocket 入口
+    app.router.add_get("/", health)               # GET 探活
+    app.router.add_head("/", health)              # HEAD 探活
+    return app
+    
 # 播放状态管理
 playback_state = {
     "is_playing": False,
@@ -420,7 +443,7 @@ server = MCPWebSocketServer()
 #    server.add_resource("music://current_playlist", "当前播放列表", "显示当前播放列表中的所有歌曲")
 #    server.add_resource("music://current_playing", "当前播放", "显示当前正在播放的歌曲信息")
 #
-import asyncio, re, io, websockets
+
 
 # ---------- 健康检查响应 ----------
 async def http_200(writer):
@@ -470,101 +493,63 @@ async def tcp_splitter(reader, writer):
         
 # ---------- 启动 ----------
 async def main():
-    # 1. 注册工具/资源（保持你原来代码）
+    # 1. 注册工具/资源（完全沿用你已有代码）
     server.add_resource("music://current_playlist", "当前播放列表", "")
-    server.add_resource("music://current_playing", "当前播放", "") 
-    
-    # 注册工具
+    server.add_resource("music://current_playing", "当前播放", "")
+
     server.add_tool("search_music", "搜索音乐", {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "搜索关键词"},
-            "limit": {"type": "integer", "description": "返回结果数量", "default": 10, "minimum": 1, "maximum": 50}
+            "query": {"type": "string"},
+            "limit": {"type": "integer", "default": 10, "minimum": 1, "maximum": 50}
         },
         "required": ["query"]
     }, search_music_handler)
-    
+
     server.add_tool("play_music", "播放音乐", {
         "type": "object",
         "properties": {
-            "song_id": {"type": "string", "description": "歌曲ID"},
-            "song_name": {"type": "string", "description": "歌曲名称"},
-            "artist": {"type": "string", "description": "歌手名称"}
+            "song_id": {"type": "string"},
+            "song_name": {"type": "string"},
+            "artist": {"type": "string"}
         },
         "required": ["song_id"]
     }, play_music_handler)
-    
-    server.add_tool("pause_music", "暂停音乐", {
-        "type": "object",
-        "properties": {}
-    }, pause_music_handler)
-    
-    server.add_tool("resume_music", "继续播放音乐", {
-        "type": "object",
-        "properties": {}
-    }, resume_music_handler)
-    
-    server.add_tool("stop_music", "停止音乐", {
-        "type": "object",
-        "properties": {}
-    }, stop_music_handler)
-    
+
+    server.add_tool("pause_music", "暂停音乐", {"type": "object"}, pause_music_handler)
+    server.add_tool("resume_music", "继续播放", {"type": "object"}, resume_music_handler)
+    server.add_tool("stop_music", "停止音乐", {"type": "object"}, stop_music_handler)
     server.add_tool("set_volume", "设置音量", {
         "type": "object",
-        "properties": {
-            "volume": {"type": "integer", "description": "音量百分比", "minimum": 0, "maximum": 100}
-        },
+        "properties": {"volume": {"type": "integer", "minimum": 0, "maximum": 100}},
         "required": ["volume"]
     }, set_volume_handler)
-    
     server.add_tool("add_to_playlist", "添加到播放列表", {
         "type": "object",
         "properties": {
-            "song_id": {"type": "string", "description": "歌曲ID"},
-            "song_name": {"type": "string", "description": "歌曲名称"},
-            "artist": {"type": "string", "description": "歌手名称"}
+            "song_id": {"type": "string"},
+            "song_name": {"type": "string"},
+            "artist": {"type": "string"}
         },
         "required": ["song_id"]
     }, add_to_playlist_handler)
-    
-    server.add_tool("get_playlist", "获取播放列表", {
-        "type": "object",
-        "properties": {}
-    }, get_playlist_handler)
-    
-    server.add_tool("clear_playlist", "清空播放列表", {
-        "type": "object",
-        "properties": {}
-    }, clear_playlist_handler)
-    
-    server.add_tool("next_song", "下一首歌", {
-        "type": "object",
-        "properties": {}
-    }, next_song_handler)
-    
-    server.add_tool("previous_song", "上一首歌", {
-        "type": "object",
-        "properties": {}
-    }, previous_song_handler)
-    
-    # 启动WebSocket服务器
-    # 支持云端部署的动态端口配置
-    #host = os.getenv('HOST', '0.0.0.0')  # 云端部署需要监听所有接口
-    #port = int(os.getenv('PORT', 10000))  # 支持云平台的动态端口
-    
-    #start_server = websockets.serve(handle_client, host, port)
-    #logger.info(f"WebSocket服务器启动在 ws://{host}:{port}")
-    
-    #await start_server
-    #await asyncio.Future()  # 保持服务器运行
-    
-    # 2. 监听单端口
-    host = "0.0.0.0"
-    port = int(os.getenv("PORT", 10000))
-    srv = await asyncio.start_server(tcp_splitter, host, port)
-    logger.info("Listening on %s:%s (Render ready)", host, port)
-    async with srv:
-        await srv.serve_forever()
+    server.add_tool("get_playlist", "获取播放列表", {"type": "object"}, get_playlist_handler)
+    server.add_tool("clear_playlist", "清空播放列表", {"type": "object"}, clear_playlist_handler)
+    server.add_tool("next_song", "下一首", {"type": "object"}, next_song_handler)
+    server.add_tool("previous_song", "上一首", {"type": "object"}, previous_song_handler)
 
+    # 2. 启动 aiohttp
+    port = int(os.getenv("PORT", 10000))
+    app = create_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Listening on http://0.0.0.0:%s  (WebSocket: ws://0.0.0.0:%s/ws)", port, port)
+
+    # 3. 永久挂起
+    await asyncio.Event().wait()
+
+# ================= 入口不变 =================
 if __name__ == "__main__":
     asyncio.run(main())

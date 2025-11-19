@@ -432,13 +432,14 @@ async def http_200(writer):
     writer.close()
     await writer.wait_closed()
 
-
 # ---------- TCP 分流 ----------
 async def tcp_splitter(reader, writer):
     header = io.BytesIO()
     first_line = await reader.readline()
     if not first_line:
-        writer.close(); return
+        writer.close()
+        await writer.wait_closed()
+        return
     header.write(first_line)
     while True:
         line = await reader.readline()
@@ -450,21 +451,22 @@ async def tcp_splitter(reader, writer):
     # 把数据塞回流
     reader._buffer = bytearray(header.getvalue()) + reader._buffer
 
-   if 'upgrade: websocket' in head_text:
-    sock = writer.get_extra_info('socket')
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    if 'upgrade: websocket' in head_text:
+        sock = writer.get_extra_info('socket')
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-    # ✅ websockets 15.x 官方做法
-    conn = ServerConnection(
-        handle_client,
-        server_reader=reader,
-        server_writer=writer,
-        close_timeout=None,
-        logger=logger,
-    )
-    await conn.run()          # 运行到 WebSocket 关闭
-else:
-    await http_200(writer)
+        # ===== websockets 15.x 官方做法 =====
+        from websockets.asyncio.server import ServerConnection
+        conn = ServerConnection(
+            handle_client,
+            server_reader=reader,
+            server_writer=writer,
+            close_timeout=None,
+            logger=logger,
+        )
+        await conn.run()          # 会阻塞到 WebSocket 关闭
+    else:
+        await http_200(writer)
         
 # ---------- 启动 ----------
 async def main():

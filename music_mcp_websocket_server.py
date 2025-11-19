@@ -40,8 +40,8 @@ async def health(_: web.Request):
 def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/ws", websocket_handler)  # WebSocket 入口
-    app.router.add_get("/", health)               # GET 探活
-    app.router.add_head("/", health)              # HEAD 探活
+    app.router.add_get("/", health)               # GET + HEAD 探活（HEAD 由 aiohttp 自动处理）
+    # app.router.add_head("/", health)            # ← 删除这一行
     return app
     
 # 播放状态管理

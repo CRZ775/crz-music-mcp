@@ -1,4 +1,4 @@
-FROM python -slim
+FROM python:3.13-slim
 #RUN pip install -U "websockets>=13"
 
 WORKDIR /app

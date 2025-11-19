@@ -216,8 +216,8 @@ class MCPWebSocketServer:
                     }
                 }
             
-            await websocket.send(json.dumps(response))
-            
+            #await websocket.send(json.dumps(response))
+            await websocket.send_str(json.dumps(response))
         except json.JSONDecodeError as e:
             logger.error(f"JSON解析错误: {e}")
             error_response = {
@@ -240,7 +240,8 @@ class MCPWebSocketServer:
                     "message": f"内部错误: {str(e)}"
                 }
             }
-            await websocket.send(json.dumps(error_response))
+            # await websocket.send(json.dumps(error_response))
+            await websocket.send_str(json.dumps(error_response))
     
     async def get_resource_content(self, uri: str) -> str:
         """获取资源内容"""

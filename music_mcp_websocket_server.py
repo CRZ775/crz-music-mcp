@@ -6,14 +6,16 @@
 """
 
 import asyncio, io, os, logging, json, socket
-from aiohttp import web          # 仅多一个轻量 HTTP 框架
+from aiohttp import web         
+# 仅多一个轻量 HTTP 框架
 import websockets
 from typing import Dict, Any, List
 from datetime import datetime
 from websockets import serve as ws_serve
 from websockets.exceptions import ConnectionClosed
 # 顶部导入补充
-from websockets.server import serve_connection   # ≥12 专用
+from websockets.server import serve_connection  
+# ≥12 专用
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)

@@ -415,6 +415,7 @@ server = MCPWebSocketServer()
     # 添加资源
 #    server.add_resource("music://current_playlist", "当前播放列表", "显示当前播放列表中的所有歌曲")
 #    server.add_resource("music://current_playing", "当前播放", "显示当前正在播放的歌曲信息")
+#
 import asyncio, re, io, websockets
 
 async def http_health_responder(reader, writer):

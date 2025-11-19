@@ -12,8 +12,8 @@ import os
 import websockets
 from typing import Dict, Any, List
 from datetime import datetime
-from websockets.server import serve as ws_serve
-from websockets.server import WebSocketServerProtocol
+from websockets import serve as ws_serve
+from websockets import WebSocketServerProtocol
 from websockets.exceptions import ConnectionClosed
 
 # 配置日志

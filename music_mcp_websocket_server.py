@@ -434,11 +434,30 @@ async def ws_handler(websocket):
     """复用你已有的 handle_client"""
     await handle_client(websocket)
 
+#async def tcp_splitter(reader, writer):
+#    """分流：HTTP 探针 vs WebSocket"""
+#    peeked = await reader.read(4096)
+#    if not peeked:
+#        writer.close(); return
+#    reader._buffer = bytearray(peeked) + reader._buffer
+#    is_ws = 'upgrade: websocket' in peeked.decode().lower()
+#    if is_ws:
+#        await websockets.asyncio.server.serve(ws_handler, reader=reader, writer=writer)
+#    else:
+#        await http_health_responder(reader, writer)
 async def tcp_splitter(reader, writer):
-    """分流：HTTP 探针 vs WebSocket"""
-    peeked = await reader.read(4096)
-    if not peeked:
+    # 1. 只读第一行 + 头部，保证 Upgrade 能被 websockets 再解析
+    first_line = await reader.readline()
+    if not first_line:
         writer.close(); return
+    headers = io.BytesIO()
+    while True:
+        line = await reader.readline()
+        headers.write(line)
+        if line == b'\r\n':
+            break
+    peeked = first_line + headers.getvalue()
+    # 2. 按正确顺序放回
     reader._buffer = bytearray(peeked) + reader._buffer
     is_ws = 'upgrade: websocket' in peeked.decode().lower()
     if is_ws:

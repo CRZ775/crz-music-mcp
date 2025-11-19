@@ -5,7 +5,7 @@
 为小智AI音响提供音乐控制服务 - WebSocket版本
 """
 
-import asyncio, os, json, logging
+import asyncio, io, os, logging, json, socket
 from aiohttp import web          # 仅多一个轻量 HTTP 框架
 import websockets
 from typing import Dict, Any, List
@@ -428,17 +428,6 @@ async def http_200(writer):
     writer.close()
     await writer.wait_closed()
 
-#async def tcp_splitter(reader, writer):
-#    """分流：HTTP 探针 vs WebSocket"""
-#    peeked = await reader.read(4096)
-#    if not peeked:
-#        writer.close(); return
-#    reader._buffer = bytearray(peeked) + reader._buffer
-#    is_ws = 'upgrade: websocket' in peeked.decode().lower()
-#    if is_ws:
-#        await websockets.asyncio.server.serve(ws_handler, reader=reader, writer=writer)
-#    else:
-#        await http_health_responder(reader, writer)
 # ---------- TCP 分流 ----------
 async def tcp_splitter(reader, writer):
     header = io.BytesIO()
@@ -457,20 +446,20 @@ async def tcp_splitter(reader, writer):
     reader._buffer = bytearray(header.getvalue()) + reader._buffer
 
     if 'upgrade: websocket' in head_text:
-        #  用官方 serve()，不再手动 new WebSocketServerProtocol
+        # ✅ 官方兼容方式：取出 socket，传给 serve()
+        sock = writer.get_extra_info('socket')
+        # 关闭 Nagle，可选
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        # 让 websockets 接管
         await ws_serve(
-            handle_client,          # 就是你原来的 ws_handler
-            host=None,              # 已绑定端口，这里不再重复
-            port=None,
+            handle_client,
+            sock=sock,          # 关键参数
             close_timeout=None,
             logger=logger,
-            _existing_socket=writer.get_extra_info('socket'),  # 关键：复用已建立连接
-            _existing_reader=reader,
-            _existing_writer=writer
         )
     else:
         await http_200(writer)
-
+        
 # ---------- 启动 ----------
 async def main():
     # 1. 注册工具/资源（保持你原来代码）

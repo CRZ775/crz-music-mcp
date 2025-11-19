@@ -4,17 +4,18 @@
 免费音乐MCP WebSocket服务器
 为小智AI音响提供音乐控制服务 - WebSocket版本
 """
-
+"""
+Render 兼容 WebSocket + HTTP 探针（websockets 11.x+）
+"""
 import asyncio
 import json
 import logging
 import os
-import websockets
+import io
 from typing import Dict, Any, List
-from datetime import datetime
+from asyncio import StreamReader, StreamWriter
 from websockets.server import serve as ws_serve
 
-# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -391,12 +392,11 @@ async def previous_song_handler(arguments: Dict[str, Any]) -> str:
 async def handle_client(websocket):
     """处理WebSocket客户端连接"""
     logger.info(f"新客户端连接: {websocket.remote_address}")
-    
     try:
-        async for message in websocket:
-            await server.handle_message(websocket, message)
+        async for msg in websocket:
+            await server.handle_message(websocket, msg)
     except websockets.exceptions.ConnectionClosed:
-        logger.info(f"客户端断开连接: {websocket.remote_address}")
+        logger.info(f"客户端断开: {websocket.remote_address}")
     except Exception as e:
         logger.error(f"处理客户端错误: {e}")
 
@@ -419,22 +419,45 @@ server = MCPWebSocketServer()
 #
 import asyncio, re, io, websockets
 
-async def http_health_responder(reader, writer):
-    """回 Render 的 HEAD/GET 探针 200 """
-    data = await reader.read(4096)
-    if not data:
-        writer.close(); return
+async def http_health_responder(reader: StreamReader, writer: StreamWriter):
     body = b"OK"
-    writer.write(b"HTTP/1.1 200 OK\r\n"
-                 b"Content-Length: %d\r\n"
-                 b"Connection: close\r\n\r\n%s" % (len(body), body))
+    writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
     await writer.drain()
     writer.close()
 
 async def ws_handler(websocket):
     """复用你已有的 handle_client"""
     await handle_client(websocket)
+async def relay_to_ws_port(reader: StreamReader, writer: StreamWriter):
+    """把 10000 的 WebSocket 流量原样转发到本地 10001"""
+    ws_reader, ws_writer = await asyncio.open_connection('127.0.0.1', 10001)
+    async def pipe(a, b):
+        while True:
+            data = await a.read(4096)
+            if not data: break
+            b.write(data)
+            await b.drain()
+    await asyncio.gather(pipe(reader, ws_writer), pipe(ws_reader, writer))
 
+async def tcp_splitter(reader: StreamReader, writer: StreamWriter):
+    first_line = await reader.readline()
+    if not first_line:
+        writer.close(); return
+    headers = io.BytesIO()
+    while True:
+        line = await reader.readline()
+        headers.write(line)
+        if line == b'\r\n': break
+    peeked = (first_line + headers.getvalue()).decode().lower()
+
+    # 放回缓冲区（必须是 bytearray）
+    reader._buffer = bytearray(first_line + headers.getvalue()) + reader._buffer
+
+    if 'upgrade: websocket' in peeked:
+        await relay_to_ws_port(reader, writer)
+    else:
+        await http_health_responder(reader, writer)
+        
 #async def tcp_splitter(reader, writer):
 #    """分流：HTTP 探针 vs WebSocket"""
 #    peeked = await reader.read(4096)
@@ -468,7 +491,15 @@ async def tcp_splitter(reader, writer):
         await http_health_responder(reader, writer)
 
 async def main():
-    logger.info("启动分流服务器（HTTP 探针 + WebSocket）...")
+    logger.info("启动 Render 兼容双协议服务...")
+    # 1. 内部真正的 WebSocket 服务（10001）
+    ws_server = await ws_serve(handle_client, '127.0.0.1', 10001)
+    logger.info("WebSocket 内部服务：ws://127.0.0.1:10001")
+    # 2. 外部 TCP 分流（10000）
+    tcp_server = await asyncio.start_server(tcp_splitter, '0.0.0.0', 10000)
+    logger.info("TCP 分流服务：0.0.0.0:10000")
+        async with ws_server, tcp_server:
+        await asyncio.gather(ws_server.wait_closed(), tcp_server.serve_forever())
     # 注册工具、资源保持原样
     server.add_resource("music://current_playlist", "当前播放列表", "显示当前播放列表中的所有歌曲")
     server.add_resource("music://current_playing", "当前播放", "显示当前正在播放的歌曲信息") 

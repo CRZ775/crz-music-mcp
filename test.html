@@ -1,0 +1,14 @@
+<!doctype html>
+<title>WSS 自检</title>
+<button onclick="test()">连接 wss</button>
+<pre id="log"></pre>
+<script>
+function log(s) { document.getElementById('log').textContent += s + '\n'; }
+function test() {
+  const ws = new WebSocket('wss://crz-music-mcp.onrender.com/ws');
+  ws.onopen    = ()  => log('✅ 已打开');
+  ws.onmessage = e  => log('📨 '+e.data);
+  ws.onerror   = e  => log('❌ error');
+  ws.onclose   = e  => log('🔒 关闭码:'+e.code);
+}
+</script>

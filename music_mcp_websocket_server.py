@@ -486,7 +486,7 @@ async def main():
     # 启动WebSocket服务器
     # 支持云端部署的动态端口配置
     host = os.getenv('HOST', '0.0.0.0')  # 云端部署需要监听所有接口
-    port = int(os.getenv('PORT', 8765))  # 支持云平台的动态端口
+    port = int(os.getenv('PORT', 10000))  # 支持云平台的动态端口
     
     start_server = websockets.serve(handle_client, host, port)
     logger.info(f"WebSocket服务器启动在 ws://{host}:{port}")

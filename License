@@ -1,1 +1,7 @@
 This project is based on bangjiong925-commits/xiaozhi-music-mcp.
+适配Render端口10000；
+Render 的健康检查默认用 HEAD 请求（不是 GET），而 websockets 库 只认 GET + Upgrade，于是直接抛 InvalidMessage，导致 handshake 失败。
+解决思路：让 同一个端口 既能返回 HEAD/GET 200，又能正常升级 WebSocket。
+最轻量的办法——在前面套一层 简单的 TCP 分流
+关键：用 bytearray 放回去
+reader._buffer = bytearray(peeked) + reader._buffer

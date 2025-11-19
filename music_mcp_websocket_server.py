@@ -438,7 +438,7 @@ async def tcp_splitter(reader, writer):
     peeked = await reader.read(4096)
     if not peeked:
         writer.close(); return
-    reader._buffer = peeked + reader._buffer
+    reader._buffer = bytearray(peeked) + reader._buffer
     is_ws = 'upgrade: websocket' in peeked.decode().lower()
     if is_ws:
         await websockets.asyncio.server.serve(ws_handler, reader=reader, writer=writer)

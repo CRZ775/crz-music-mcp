@@ -14,7 +14,7 @@ from datetime import datetime
 from websockets import serve as ws_serve
 from websockets.exceptions import ConnectionClosed
 # 顶部导入补充
-from websockets.asyncio.server import serveconnection
+from websockets.asyncio.server import ServerConnection
 # 15 专用
 
 # 配置日志

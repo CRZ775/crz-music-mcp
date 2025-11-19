@@ -17,8 +17,10 @@ from websockets.asyncio.server import ServerConnection
 # 15 专用
 
 # 配置日志
+logging.basicConfig(level=logging.DEBUG)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("music-mcp")
+
 # 新增：aiohttp 统一入口 
 async def websocket_handler(request: web.Request):
     """aiohttp 接管 WebSocket"""

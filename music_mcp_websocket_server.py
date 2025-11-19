@@ -14,7 +14,7 @@ from datetime import datetime
 from websockets import serve as ws_serve
 from websockets.exceptions import ConnectionClosed
 # 顶部导入补充
-from websockets.asyncio.server import serve_connection
+from websockets.asyncio.server import serveconnection
 # 15 专用
 
 # 配置日志
@@ -450,21 +450,21 @@ async def tcp_splitter(reader, writer):
     # 把数据塞回流
     reader._buffer = bytearray(header.getvalue()) + reader._buffer
 
-    if 'upgrade: websocket' in head_text:
-        sock = writer.get_extra_info('socket')
-        # 关闭 Nagle（可选）
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+   if 'upgrade: websocket' in head_text:
+    sock = writer.get_extra_info('socket')
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-        # ✅ 12.x 官方做法：直接 serve 这条已连接 socket
-        await serve_connection(
-            handle_client,
-            reader,
-            writer,
-            close_timeout=None,
-            logger=logger,
-        )
-    else:
-        await http_200(writer)
+    # ✅ websockets 15.x 官方做法
+    conn = ServerConnection(
+        handle_client,
+        server_reader=reader,
+        server_writer=writer,
+        close_timeout=None,
+        logger=logger,
+    )
+    await conn.run()          # 运行到 WebSocket 关闭
+else:
+    await http_200(writer)
         
 # ---------- 启动 ----------
 async def main():

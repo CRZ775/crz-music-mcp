@@ -1,13 +1,13 @@
 services:
   - type: web
-    name: xiaozhi-music-mcp
+    name: crz-music-mcp
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python3 music_mcp_websocket_server.py
     envVars:
       - key: PYTHON_VERSION
-        value: 3.9.18
+        value: 3.12.4
       - key: PORT
-        value: 8765
+        value: 10000
     autoDeploy: false

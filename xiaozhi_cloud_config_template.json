@@ -3,7 +3,7 @@
     "xiaozhi-music-cloud": {
       "command": "websocket",
       "args": {
-        "url": "wss://YOUR-APP-NAME.up.railway.app",
+        "url": "wss://crz-music-mcp.onrender.com/ws",
         "transport": "websocket"
       },
       "name": "小智免费音乐服务器（云端版）",

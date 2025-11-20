@@ -2,7 +2,7 @@
   "name": "免费音乐MCP服务器",
   "description": "为小智AI音响提供免费音乐搜索、播放控制、音量调节、播放列表管理等功能",
   "version": "1.0.0",
-  "endpoint_url": "ws://localhost:8765",
+  "endpoint_url": "wss://crz-music-mcp.onrender.com/ws",
   "transport": "websocket",
   "tools": [
     {

@@ -93,155 +93,52 @@ class MCPWebSocketServer:
             "description": description
         }
     
-    async def handle_message(self, websocket, message: str):
-        """处理WebSocket消息"""
+        async def handle_message(self, websocket, message: str):
+        """处理WebSocket消息（aiohttp版）"""
+        if not message or not message.strip():          # ① 空消息直接丢
+            logger.warning("收到空消息，忽略")
+            return
         try:
             data = json.loads(message)
+        except json.JSONDecodeError as e:
+            logger.error("JSON解析错误: %s", e)
+            err = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+            await websocket.send_str(json.dumps(err))   # ② 用 send_str
+            return
+
+        try:
             method = data.get("method")
             msg_id = data.get("id")
             params = data.get("params", {})
-            
-            logger.info(f"收到消息: {method}")
-            
+            logger.info("收到消息: %s", method)
+
             if method == "initialize":
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
+                resp = {
+                    "jsonrpc": "2.0", "id": msg_id,
                     "result": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {
                             "tools": {"listChanged": True},
                             "resources": {"subscribe": True, "listChanged": True}
                         },
-                        "serverInfo": {
-                            "name": "music-mcp-server",
-                            "version": "1.0.0"
-                        }
+                        "serverInfo": {"name": "music-mcp-server", "version": "1.0.0"}
                     }
                 }
-                
             elif method == "tools/list":
-                tools_list = [{
-                    "name": tool["name"],
-                    "description": tool["description"],
-                    "inputSchema": tool["inputSchema"]
-                } for tool in self.tools.values()]
-                
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "result": {
-                        "tools": tools_list
-                    }
-                }
-                
-            elif method == "tools/call":
-                tool_name = params.get("name")
-                arguments = params.get("arguments", {})
-                
-                if tool_name in self.tools:
-                    try:
-                        result = await self.tools[tool_name]["handler"](arguments)
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": msg_id,
-                            "result": {
-                                "content": [{
-                                    "type": "text",
-                                    "text": result
-                                }]
-                            }
-                        }
-                    except Exception as e:
-                        logger.error(f"工具调用错误: {e}")
-                        response = {
-                            "jsonrpc": "2.0",
-                            "id": msg_id,
-                            "error": {
-                                "code": -32603,
-                                "message": f"工具执行错误: {str(e)}"
-                            }
-                        }
-                else:
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": msg_id,
-                        "error": {
-                            "code": -32601,
-                            "message": f"未知工具: {tool_name}"
-                        }
-                    }
-                    
+                tools = [{"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
+                         for t in self.tools.values()]
+                resp = {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": tools}}
             elif method == "resources/list":
-                resources_list = list(self.resources.values())
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "result": {
-                        "resources": resources_list
-                    }
-                }
-                
-            elif method == "resources/read":
-                uri = params.get("uri")
-                if uri in self.resources:
-                    content = await self.get_resource_content(uri)
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": msg_id,
-                        "result": {
-                            "contents": [{
-                                "uri": uri,
-                                "mimeType": "text/plain",
-                                "text": content
-                            }]
-                        }
-                    }
-                else:
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": msg_id,
-                        "error": {
-                            "code": -32602,
-                            "message": f"未知资源: {uri}"
-                        }
-                    }
+                resp = {"jsonrpc": "2.0", "id": msg_id, "result": {"resources": list(self.resources.values())}}
             else:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "error": {
-                        "code": -32601,
-                        "message": f"未知方法: {method}"
-                    }
-                }
-            
-            #await websocket.send(json.dumps(response))
-            await websocket.send_str(json.dumps(response))
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON解析错误: {e}")
-            error_response = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32700,
-                    "message": "JSON解析错误"
-                }
-            }
-            await websocket.send(json.dumps(error_response))
-            
+                resp = {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": f"Unknown method: {method}"}}
+
+            await websocket.send_str(json.dumps(resp))      # ③ 统一 send_str
+
         except Exception as e:
-            logger.error(f"处理消息错误: {e}")
-            error_response = {
-                "jsonrpc": "2.0",
-                "id": data.get("id") if 'data' in locals() else None,
-                "error": {
-                    "code": -32603,
-                    "message": f"内部错误: {str(e)}"
-                }
-            }
-            # await websocket.send(json.dumps(error_response))
-            await websocket.send_str(json.dumps(error_response))
+            logger.exception("处理消息异常")
+            err = {"jsonrpc": "2.0", "id": data.get("id"), "error": {"code": -32603, "message": f"Internal error: {str(e)}"}}
+            await websocket.send_str(json.dumps(err))       # ④ 统一 send_str
     
     async def get_resource_content(self, uri: str) -> str:
         """获取资源内容"""

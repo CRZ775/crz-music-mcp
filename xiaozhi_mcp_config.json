@@ -2,7 +2,7 @@
   "name": "免费音乐MCP服务器",
   "description": "为小智AI音响提供免费音乐控制服务，支持搜索、播放、暂停、音量控制等功能",
   "version": "1.0.0",
-  "endpoint_url": "wss://api.xiaozhi.me/mcp/?token=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQzNTg0NiwiYWdlbnRJZCI6NTU1NjIwLCJlbmRwb2ludElkIjoiYWdlbnRfNTU1NjIwIiwicHVycG9zZSI6Im1jcC1lbmRwb2ludCIsImlhdCI6MTc1NDk4NDMyMn0.jJsrIPxlMRIoFnLN2bfuYlOj8cLW0ovX3V2hasNLgihFR-QGLgDLc5Bud6f_HjseF4C73VSOzClRoZCFrsHMHw",
+  "endpoint_url": "wss://api.xiaozhi.me/mcp/?token=eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjYwODQ0MSwiYWdlbnRJZCI6OTgwOTIzLCJlbmRwb2ludElkIjoiYWdlbnRfOTgwOTIzIiwicHVycG9zZSI6Im1jcC1lbmRwb2ludCIsImlhdCI6MTc2MzU5OTE1OSwiZXhwIjoxNzk1MTU2NzU5fQ.Heo5lGMMKWxIha-XLd5ZlY6tJZbYMsvyXbka93zmTQ0ZK4WAB9ZqXMb59wOUOfyhtTqJIRL6tMHtXLduBw5U3w",
   "transport": "websocket",
   "capabilities": {
     "tools": true,

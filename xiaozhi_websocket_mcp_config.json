@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "transport": {
     "type": "websocket",
-    "endpoint_url": "ws://localhost:8765"
+    "endpoint_url": "wss://crz-music-mcp.onrender.com/ws"
   },
   "tools": [
     {

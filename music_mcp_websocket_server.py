@@ -93,7 +93,7 @@ class MCPWebSocketServer:
             "description": description
         }
     
-        async def handle_message(self, websocket, message: str):
+    async def handle_message(self, websocket, message: str):
         """处理WebSocket消息（aiohttp版）"""
         if not message or not message.strip():          # ① 空消息直接丢
             logger.warning("收到空消息，忽略")
